@@ -1,0 +1,251 @@
+ README
+ -------
+
+ Deployment :
+ To deploy the nginxdemo deployment and service, execute the below.  
+
+ $ kubectl create -f nginxdemo.yml
+ $ kubectl create -f nginxdemo-svc.yml
+ $ kubectl -n prod describe deploy nginxdemos
+ 
+ Since this is a Production setup, proper RBAC needs to be in place within the 'prod' namespace.  For demonstration purpose, 2 levels of access are provisioned.  
+ 1) A read-only role which allows only read-only access to all resources, apps, deployments etc...
+ 2) Full administrative access role for management purposes.  
+
+ Below are the steps for the setup. 
+ Reference: https://medium.com/@HoussemDellai/rbac-with-kubernetes-in-minikube-4deed658ea7b
+ 
+ a) Setup read-only user for monitoring and checking configurations.
+ 
+ 1. Generate a key using OpenSSL:
+    $ mkdir -p cert/user1_auth_info && cd cert/user1_auth_info
+    $ openssl genrsa -out user1.key 2048
+
+ 2. Generate a Client Sign Request (CSR).  
+    $ openssl req -new -key user1.key -out user1.csr
+
+    Eg, 
+    ➜  user1_auth_info openssl req -new -key user1.key -out user1.csr
+      You are about to be asked to enter information that will be incorporated
+      into your certificate request.
+      What you are about to enter is what is called a Distinguished Name or a DN.
+      There are quite a few fields but you can leave some blank
+      For some fields there will be a default value,
+      If you enter '.', the field will be left blank.
+      -----
+      Country Name (2 letter code) []:SG
+      State or Province Name (full name) []:Singapore
+      Locality Name (eg, city) []:Singapore
+      Organization Name (eg, company) []:group1
+      Organizational Unit Name (eg, section) []:
+      Common Name (eg, fully qualified host name) []:user1
+      Email Address []:
+
+      Please enter the following 'extra' attributes
+      to be sent with your certificate request
+      A challenge password []:
+
+    $ ls ~/.minikube/ # check that the files ca.crt and ca.key exists in this location.
+
+ 3. Generate the certificate (CRT).  
+    $ openssl x509 -req -in user1.csr -CA ~/.minikube/ca.crt -CAkey ~/.minikube/ca.key -CAcreateserial -out user1.crt -days 365
+
+ 4. Set a user entry in kubeconfig.   
+    $ kubectl config set-credentials user1 --client-certificate=user1.crt --client-key=user1.key
+
+ 5. Set a context entry in kubeconfig.  
+    $ kubectl config set-context user1-context --cluster=minikube --user=user1
+
+    Check to ensure that the entry is added to kubeconfig.  
+    $ kubectl config view
+
+ 6. Grant access to the user by creating a role.    
+    $ kubectl create role read-only-role  --verb=get --verb=list --resource="*" --namespace=prod --dry-run=client -o yaml > /var/tmp/ro-role.yml
+    $ vi /var/tmp/ro-role.yml
+    $ cat /var/tmp/ro-role.yml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+            creationTimestamp: null
+            name: read-only-role
+            namespace: prod
+        rules:
+        - apiGroups:
+          - "*"  <-- Change this to '*'
+          resources:
+          - '*'
+          verbs:
+          - get
+          - list
+    $ kubectl create -f /var/tmp/ro-role.yml
+
+    Check to ensure everything is in order.  
+    $ kubectl get role read-only-role -n prod
+    $ kubectl describe role read-only-role -n prod
+
+ 7. Tie the role to a role binding object.  
+    $ kubectl create rolebinding read-only-role-binding --role=read-only-role --user=user1 -n prod
+    $ kubectl describe rolebinding read-only-role-binding -n prod
+
+ 8. Test out the access. 
+    $ kubectl config use-context user1-context
+    $ kubectl config current-context 
+
+➜  cert kubectl get pod -n prod
+NAME                          READY   STATUS    RESTARTS        AGE
+nginxdemos-56848d57cd-htfpk   1/1     Running   4 (2d22h ago)   21d
+nginxdemos-56848d57cd-svs9p   1/1     Running   4 (2d22h ago)   21d
+nginxdemos-56848d57cd-wwbjm   1/1     Running   4 (2d22h ago)   21d
+➜  cert kubectl get deploy -n prod
+NAME         READY   UP-TO-DATE   AVAILABLE   AGE
+nginxdemos   3/3     3            3           21d
+➜  cert kubectl describe deploy -n prod
+Name:                   nginxdemos
+Namespace:              prod
+CreationTimestamp:      Thu, 31 Mar 2022 21:26:54 +0800
+Labels:                 app=nginxdemos
+Annotations:            deployment.kubernetes.io/revision: 1
+Selector:               app=nginxdemos
+Replicas:               3 desired | 3 updated | 3 total | 3 available | 0 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=nginxdemos
+  Containers:
+   nginx-demo:
+    Image:        nginxdemos/hello
+    Port:         80/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Progressing    True    NewReplicaSetAvailable
+  Available      True    MinimumReplicasAvailable
+OldReplicaSets:  <none>
+NewReplicaSet:   nginxdemos-56848d57cd (3/3 replicas created)
+Events:          <none>
+➜  cert kubectl delete role read-only-role -n prod
+Error from server (Forbidden): roles.rbac.authorization.k8s.io "read-only-role" is forbidden: User "user1" cannot delete resource "roles" in API group "rbac.authorization.k8s.io" in the namespace "prod"
+➜  cert kubectl run abc --image=nginx -n prod
+Error from server (Forbidden): pods is forbidden: User "user1" cannot create resource "pods" in API group "" in the namespace "prod"
+
+
+ b) Setup admin user for administrating the prod namespace in the minikue cluster.
+
+ 1. Generate a key using OpenSSL:
+    $ mkdir -p cert/kadmin_auth_info && cd cert/kadmin_auth_info
+    $ openssl genrsa -out kadmin.key 2048
+
+ 2. Generate a Client Sign Request (CSR).  
+    $ openssl req -new -key kadmin.key -out kadmin.csr
+
+    ➜  kadmin2_auth_info openssl req -new -key kadmin2.key -out kadmin.csr
+      You are about to be asked to enter information that will be incorporated
+      into your certificate request.
+      What you are about to enter is what is called a Distinguished Name or a DN.
+      There are quite a few fields but you can leave some blank
+      For some fields there will be a default value,
+      If you enter '.', the field will be left blank.
+      -----
+      Country Name (2 letter code) []:SG
+      string is too long, it needs to be less than  2 bytes long
+      Country Name (2 letter code) []:SG
+      State or Province Name (full name) []:Singapore
+      Locality Name (eg, city) []:Singapore
+      Organization Name (eg, company) []:group2
+      Organizational Unit Name (eg, section) []:
+      Common Name (eg, fully qualified host name) []:kadmin
+      Email Address []:
+
+ 3. Generate the certificate (CRT).  
+    $ openssl x509 -req -in kadmin.csr -CA ~/.minikube/ca.crt -CAkey ~/.minikube/ca.key -CAcreateserial -out kadmin.crt -days 365
+
+ 4. Set a user entry in kubeconfig. 
+    $ kubectl config set-credentials kadmin --client-certificate=kadmin.crt --client-key=kadmin.key
+
+5. Set a context entry in kubeconfig.  
+    $ kubectl config set-context kadmin-context --cluster=minikube --user=kadmin
+
+    Check to ensure that the entry is added to kubeconfig.  
+    $ kubectl config view
+
+ 6. Grant access to the user by creating a role. 
+    $ kubectl create role admin-role  --verb="*" --resource="*" --namespace=prod --dry-run=client -o yaml > /var/tmp/admin.yml
+    $ vi /var/tmp/admin.yml
+    $ cat /var/tmp/admin.yml
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      creationTimestamp: null
+      name: admin-role
+      namespace: prod
+    rules:
+    - apiGroups:
+      - "*"     <-- Change this to '*'
+      resources:
+      - '*'
+      verbs:
+      - '*'
+    $ kubectl create -f /var/tmp/admin.yml
+
+    Check to ensure everything is in order.  
+    $ kubectl get role admin-role -n prod
+    $ kubectl describe role admin-role -n prod
+
+ 7. Tie the role to a role binding object.  
+    $ kubectl create rolebinding admin-role-binding --role=admin-role --user=kadmin -n prod
+    $ kubectl describe rolebinding admin-role-binding -n prod
+
+ 8. Test out the access.  
+
+    $ kubectl config use-context user1-context
+    $ kubectl config current-context 
+
+ ➜  cert kubectl get deploy -A
+Error from server (Forbidden): deployments.apps is forbidden: User "kadmin" cannot list resource "deployments" in API group "apps" at the cluster scope
+ ➜  cert kubectl -n prod scale --replicas=6 deploy/nginxdemos
+deployment.apps/nginxdemos scaled
+➜  cert kubectl describe deploy -n prod
+Name:                   nginxdemos
+Namespace:              prod
+CreationTimestamp:      Thu, 31 Mar 2022 21:26:54 +0800
+Labels:                 app=nginxdemos
+Annotations:            deployment.kubernetes.io/revision: 1
+Selector:               app=nginxdemos
+Replicas:               6 desired | 6 updated | 6 total | 3 available | 3 unavailable
+StrategyType:           RollingUpdate
+MinReadySeconds:        0
+RollingUpdateStrategy:  25% max unavailable, 25% max surge
+Pod Template:
+  Labels:  app=nginxdemos
+  Containers:
+   nginx-demo:
+    Image:        nginxdemos/hello
+    Port:         80/TCP
+    Host Port:    0/TCP
+    Environment:  <none>
+    Mounts:       <none>
+  Volumes:        <none>
+Conditions:
+  Type           Status  Reason
+  ----           ------  ------
+  Progressing    True    NewReplicaSetAvailable
+  Available      False   MinimumReplicasUnavailable
+OldReplicaSets:  <none>
+NewReplicaSet:   nginxdemos-56848d57cd (6/6 replicas created)
+Events:
+  Type    Reason             Age   From                   Message
+  ----    ------             ----  ----                   -------
+  Normal  ScalingReplicaSet  5s    deployment-controller  Scaled up replica set nginxdemos-56848d57cd to 6
+➜  cert kubectl get pod -n prod
+NAME                          READY   STATUS    RESTARTS        AGE
+nginxdemos-56848d57cd-dpw7m   1/1     Running   0               15s
+nginxdemos-56848d57cd-htfpk   1/1     Running   4 (2d22h ago)   21d
+nginxdemos-56848d57cd-svs9p   1/1     Running   4 (2d22h ago)   21d
+nginxdemos-56848d57cd-wvmfx   1/1     Running   0               15s
+nginxdemos-56848d57cd-wwbjm   1/1     Running   4 (2d22h ago)   21d
+nginxdemos-56848d57cd-x47tb   1/1     Running   0               15s
