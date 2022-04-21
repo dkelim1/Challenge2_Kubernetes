@@ -202,7 +202,7 @@ Error from server (Forbidden): pods is forbidden: User "user1" cannot create res
 
  8. Test out the access.  
 
-    $ kubectl config use-context user1-context
+    $ kubectl config use-context kadmin-context
     $ kubectl config current-context 
 
  ➜  cert kubectl get deploy -A
